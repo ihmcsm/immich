@@ -28,7 +28,7 @@ describe(SyncEntityType.PersonV1, () => {
       {
         ack: expect.any(String),
         data: expect.objectContaining({
-          id: person.id,
+          id: person.groupId,
           name: person.name,
           isHidden: person.isHidden,
           birthDate: person.birthDate,
@@ -57,7 +57,7 @@ describe(SyncEntityType.PersonV1, () => {
       {
         ack: expect.any(String),
         data: {
-          personId: person.id,
+          personId: person.groupId,
         },
         type: 'PersonDeleteV1',
       },

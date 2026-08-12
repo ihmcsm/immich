@@ -187,13 +187,50 @@ where
   "notification"."id" in ($1)
   and "notification"."userId" = $2
 
+-- AccessRepository.clusterGroup.checkReadAccess
+select
+  "cluster_group"."id"
+from
+  "cluster_group"
+where
+  "cluster_group"."id" in ($1)
+  and (
+    exists (
+      select
+        "user"."id"
+      from
+        "user"
+      where
+        "user"."clusterGroupId" = "cluster_group"."id"
+        and "user"."id" = $2
+    )
+    or exists (
+      select
+        "cluster_group_request"."id"
+      from
+        "cluster_group_request"
+      where
+        "cluster_group_request"."clusterGroupId" = "cluster_group"."id"
+        and "cluster_group_request"."userId" = $3
+    )
+  )
+
+-- AccessRepository.clusterGroup.checkOwnerAccess
+select
+  "user"."clusterGroupId"
+from
+  "user"
+where
+  "user"."clusterGroupId" in ($1)
+  and "user"."id" = $2
+
 -- AccessRepository.person.checkOwnerAccess
 select
-  "person"."id"
+  "person"."groupId"
 from
   "person"
 where
-  "person"."id" in ($1)
+  "person"."groupId" in ($1)
   and "person"."ownerId" = $2
 
 -- AccessRepository.person.checkFaceOwnerAccess

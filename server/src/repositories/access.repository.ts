@@ -420,23 +420,75 @@ class MemoryAccess {
   }
 }
 
+class ClusterGroupAccess {
+  constructor(private db: Kysely<DB>) {}
+
+  /** a pending request is enough to look at the group being joined */
+  @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID_SET] })
+  @ChunkedSet({ paramIndex: 1 })
+  async checkReadAccess(userId: string, clusterGroupIds: Set<string>) {
+    if (clusterGroupIds.size === 0) {
+      return new Set<string>();
+    }
+
+    return this.db
+      .selectFrom('cluster_group')
+      .select('cluster_group.id')
+      .where('cluster_group.id', 'in', [...clusterGroupIds])
+      .where(({ or, exists, selectFrom }) =>
+        or([
+          exists(
+            selectFrom('user')
+              .select('user.id')
+              .whereRef('user.clusterGroupId', '=', 'cluster_group.id')
+              .where('user.id', '=', userId),
+          ),
+          exists(
+            selectFrom('cluster_group_request')
+              .select('cluster_group_request.id')
+              .whereRef('cluster_group_request.clusterGroupId', '=', 'cluster_group.id')
+              .where('cluster_group_request.userId', '=', userId),
+          ),
+        ]),
+      )
+      .execute()
+      .then((groups) => new Set(groups.map((group) => group.id)));
+  }
+
+  @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID_SET] })
+  @ChunkedSet({ paramIndex: 1 })
+  async checkOwnerAccess(userId: string, clusterGroupIds: Set<string>) {
+    if (clusterGroupIds.size === 0) {
+      return new Set<string>();
+    }
+
+    return this.db
+      .selectFrom('user')
+      .select('user.clusterGroupId')
+      .where('user.clusterGroupId', 'in', [...clusterGroupIds])
+      .where('user.id', '=', userId)
+      .execute()
+      .then((users) => new Set(users.map((user) => user.clusterGroupId)));
+  }
+}
+
 class PersonAccess {
   constructor(private db: Kysely<DB>) {}
 
   @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID_SET] })
   @ChunkedSet({ paramIndex: 1 })
-  async checkOwnerAccess(userId: string, personIds: Set<string>) {
-    if (personIds.size === 0) {
+  async checkOwnerAccess(userId: string, groupIds: Set<string>) {
+    if (groupIds.size === 0) {
       return new Set<string>();
     }
 
     return this.db
       .selectFrom('person')
-      .select('person.id')
-      .where('person.id', 'in', [...personIds])
+      .select('person.groupId')
+      .where('person.groupId', 'in', [...groupIds])
       .where('person.ownerId', '=', userId)
       .execute()
-      .then((persons) => new Set(persons.map((person) => person.id)));
+      .then((persons) => new Set(persons.map((person) => person.groupId)));
   }
 
   @GenerateSql({ params: [DummyValue.UUID, DummyValue.UUID_SET] })
@@ -526,6 +578,7 @@ export class AccessRepository {
   duplicate: DuplicateAccess;
   memory: MemoryAccess;
   notification: NotificationAccess;
+  clusterGroup: ClusterGroupAccess;
   person: PersonAccess;
   partner: PartnerAccess;
   session: SessionAccess;
@@ -542,6 +595,7 @@ export class AccessRepository {
     this.duplicate = new DuplicateAccess(db);
     this.memory = new MemoryAccess(db);
     this.notification = new NotificationAccess(db);
+    this.clusterGroup = new ClusterGroupAccess(db);
     this.person = new PersonAccess(db);
     this.partner = new PartnerAccess(db);
     this.session = new SessionAccess(db);

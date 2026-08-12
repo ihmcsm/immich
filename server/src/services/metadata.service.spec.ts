@@ -17,6 +17,7 @@ import {
 import { ImmichTags } from 'src/repositories/metadata.repository';
 import { firstDateTime, MetadataService } from 'src/services/metadata.service';
 import { AssetFactory } from 'test/factories/asset.factory';
+import { PersonGroupFactory } from 'test/factories/person-group.factory';
 import { PersonFactory } from 'test/factories/person.factory';
 import { videoInfoStub } from 'test/fixtures/media.stub';
 import { tagStub } from 'test/fixtures/tag.stub';
@@ -1388,7 +1389,8 @@ describe(MetadataService.name, () => {
 
       mockReadTags(faceTags);
       mocks.person.getDistinctNames.mockResolvedValue([]);
-      mocks.person.createAll.mockResolvedValue([person.id]);
+      mocks.person.createGroups.mockResolvedValue([PersonGroupFactory.create({ id: person.groupId })]);
+      mocks.person.createAll.mockResolvedValue([person]);
       mocks.person.update.mockResolvedValue(person);
 
       await sut.handleMetadataExtraction({ id: asset.id });
@@ -1411,7 +1413,8 @@ describe(MetadataService.name, () => {
       mocks.systemMetadata.get.mockResolvedValue({ metadata: { faces: { import: true } } });
       mockReadTags(makeFaceTags({ Name: person.name }));
       mocks.person.getDistinctNames.mockResolvedValue([]);
-      mocks.person.createAll.mockResolvedValue([person.id]);
+      mocks.person.createGroups.mockResolvedValue([PersonGroupFactory.create({ id: person.groupId })]);
+      mocks.person.createAll.mockResolvedValue([person]);
       mocks.person.update.mockResolvedValue(person);
       await sut.handleMetadataExtraction({ id: asset.id });
       expect(mocks.assetJob.getForMetadataExtraction).toHaveBeenCalledWith(asset.id);
@@ -1422,7 +1425,7 @@ describe(MetadataService.name, () => {
           {
             id: 'random-uuid',
             assetId: asset.id,
-            personId: 'random-uuid',
+            personGroupId: person.groupId,
             imageHeight: 100,
             imageWidth: 1000,
             boundingBoxX1: 0,
@@ -1435,7 +1438,13 @@ describe(MetadataService.name, () => {
         [],
       );
       expect(mocks.person.updateAll).toHaveBeenCalledWith([
-        { id: 'random-uuid', ownerId: asset.ownerId, faceAssetId: 'random-uuid' },
+        {
+          id: 'random-uuid',
+          ownerId: asset.ownerId,
+          groupId: person.groupId,
+          name: person.name,
+          faceAssetId: 'random-uuid',
+        },
       ]);
       expect(mocks.job.queueAll).toHaveBeenCalledWith([
         {
@@ -1452,7 +1461,8 @@ describe(MetadataService.name, () => {
       mocks.assetJob.getForMetadataExtraction.mockResolvedValue(getForMetadataExtraction(asset));
       mocks.systemMetadata.get.mockResolvedValue({ metadata: { faces: { import: true } } });
       mockReadTags(makeFaceTags({ Name: person.name }));
-      mocks.person.getDistinctNames.mockResolvedValue([{ id: person.id, name: person.name }]);
+      mocks.person.getDistinctNames.mockResolvedValue([{ groupId: person.groupId, name: person.name }]);
+      mocks.person.createGroups.mockResolvedValue([]);
       mocks.person.createAll.mockResolvedValue([]);
       mocks.person.update.mockResolvedValue(person);
       await sut.handleMetadataExtraction({ id: asset.id });
@@ -1464,7 +1474,7 @@ describe(MetadataService.name, () => {
           {
             id: 'random-uuid',
             assetId: asset.id,
-            personId: person.id,
+            personGroupId: person.groupId,
             imageHeight: 100,
             imageWidth: 1000,
             boundingBoxX1: 0,
@@ -1540,7 +1550,8 @@ describe(MetadataService.name, () => {
           mocks.systemMetadata.get.mockResolvedValue({ metadata: { faces: { import: true } } });
           mockReadTags(makeFaceTags({ Name: person.name }, orientation));
           mocks.person.getDistinctNames.mockResolvedValue([]);
-          mocks.person.createAll.mockResolvedValue([person.id]);
+          mocks.person.createGroups.mockResolvedValue([PersonGroupFactory.create({ id: person.groupId })]);
+          mocks.person.createAll.mockResolvedValue([person]);
           mocks.person.update.mockResolvedValue(person);
           await sut.handleMetadataExtraction({ id: asset.id });
           expect(mocks.assetJob.getForMetadataExtraction).toHaveBeenCalledWith(asset.id);
@@ -1553,7 +1564,7 @@ describe(MetadataService.name, () => {
               {
                 id: 'random-uuid',
                 assetId: asset.id,
-                personId: 'random-uuid',
+                personGroupId: person.groupId,
                 imageWidth: imgW,
                 imageHeight: imgH,
                 boundingBoxX1: x1,
@@ -1566,7 +1577,13 @@ describe(MetadataService.name, () => {
             [],
           );
           expect(mocks.person.updateAll).toHaveBeenCalledWith([
-            { id: 'random-uuid', ownerId: asset.ownerId, faceAssetId: 'random-uuid' },
+            {
+              id: 'random-uuid',
+              ownerId: asset.ownerId,
+              groupId: person.groupId,
+              name: person.name,
+              faceAssetId: 'random-uuid',
+            },
           ]);
           expect(mocks.job.queueAll).toHaveBeenCalledWith([
             {

@@ -902,21 +902,39 @@ export class MetadataService extends BaseService {
 
     const facesToAdd: (Insertable<AssetFaceTable> & { assetId: string })[] = [];
     const existingNames = await this.personRepository.getDistinctNames(asset.ownerId, { withHidden: true });
-    const existingNameMap = new Map(existingNames.map(({ id, name }) => [name.toLowerCase(), id]));
-    const missing: (Insertable<PersonTable> & { ownerId: string })[] = [];
-    const missingWithFaceAsset: { id: string; ownerId: string; faceAssetId: string }[] = [];
+    const existingNameMap = new Map(existingNames.map(({ groupId, name }) => [name.toLowerCase(), groupId]));
+    const missing: Insertable<PersonTable>[] = [];
 
     const adjustedRegionInfo = this.orientRegionInfo(tags.RegionInfo, tags.Orientation);
     const imageWidth = adjustedRegionInfo.AppliedToDimensions.W;
     const imageHeight = adjustedRegionInfo.AppliedToDimensions.H;
 
-    for (const region of adjustedRegionInfo.RegionList) {
-      if (!region.Name) {
+    // a region without a name cannot be matched to a person
+    const regions = adjustedRegionInfo.RegionList.flatMap((region) =>
+      region.Name ? [{ ...region, name: region.Name, key: region.Name.toLowerCase() }] : [],
+    );
+
+    // a name without a person yet needs a group for its faces to reference
+    const newNames = new Map<string, string>();
+    for (const { key, name } of regions) {
+      if (!existingNameMap.has(key)) {
+        newNames.set(key, name);
+      }
+    }
+
+    const newGroups = await this.personRepository.createGroups(asset.ownerId, newNames.size);
+    for (const [index, [key, name]] of [...newNames].entries()) {
+      const groupId = newGroups[index].id;
+      existingNameMap.set(key, groupId);
+      missing.push({ id: this.cryptoRepository.randomUUID(), ownerId: asset.ownerId, groupId, name });
+    }
+
+    const faceIdByGroupId = new Map<string, string>();
+    for (const region of regions) {
+      const groupId = existingNameMap.get(region.key);
+      if (!groupId) {
         continue;
       }
-
-      const loweredName = region.Name.toLowerCase();
-      const personId = existingNameMap.get(loweredName) || this.cryptoRepository.randomUUID();
 
       const X = Number(region.Area.X);
       const Y = Number(region.Area.Y);
@@ -925,7 +943,7 @@ export class MetadataService extends BaseService {
 
       const face = {
         id: this.cryptoRepository.randomUUID(),
-        personId,
+        personGroupId: groupId,
         assetId: asset.id,
         imageWidth,
         imageHeight,
@@ -937,16 +955,15 @@ export class MetadataService extends BaseService {
       };
 
       facesToAdd.push(face);
-      if (!existingNameMap.has(loweredName)) {
-        missing.push({ id: personId, ownerId: asset.ownerId, name: region.Name });
-        missingWithFaceAsset.push({ id: personId, ownerId: asset.ownerId, faceAssetId: face.id });
+      if (!faceIdByGroupId.has(groupId)) {
+        faceIdByGroupId.set(groupId, face.id);
       }
     }
 
     if (missing.length > 0) {
       this.logger.debugFn(() => `Creating missing persons: ${missing.map((p) => `${p.name}/${p.id}`)}`);
-      const newPersonIds = await this.personRepository.createAll(missing);
-      const jobs = newPersonIds.map((id) => ({ name: JobName.PersonGenerateThumbnail, data: { id } }) as const);
+      const newPeople = await this.personRepository.createAll(missing);
+      const jobs = newPeople.map(({ id }) => ({ name: JobName.PersonGenerateThumbnail, data: { id } }) as const);
       await this.jobRepository.queueAll(jobs);
     }
 
@@ -965,8 +982,11 @@ export class MetadataService extends BaseService {
       await this.personRepository.refreshFaces(facesToAdd, facesToRemove);
     }
 
-    if (missingWithFaceAsset.length > 0) {
-      await this.personRepository.updateAll(missingWithFaceAsset);
+    // a new person can only point at its feature face once that face exists
+    if (missing.length > 0) {
+      await this.personRepository.updateAll(
+        missing.map((person) => ({ ...person, faceAssetId: faceIdByGroupId.get(person.groupId as string) })),
+      );
     }
   }
 

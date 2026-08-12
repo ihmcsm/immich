@@ -10,6 +10,9 @@ export class PersonAuditTable {
   personId!: string;
 
   @Column({ type: 'uuid', index: true })
+  groupId!: string;
+
+  @Column({ type: 'uuid', index: true })
   ownerId!: string;
 
   @CreateDateColumn({ default: () => 'clock_timestamp()', index: true })

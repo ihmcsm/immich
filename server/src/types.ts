@@ -431,6 +431,7 @@ export type JobItem =
 
   // Asset Deletion
   | { name: JobName.PersonCleanup; data?: IBaseJob }
+  | { name: JobName.PersonGroupCleanup; data?: IBaseJob }
   | { name: JobName.AssetDelete; data: IAssetDeleteJob }
   | { name: JobName.AssetDeleteCheck; data?: IBaseJob }
 

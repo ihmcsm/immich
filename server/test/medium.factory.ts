@@ -25,6 +25,7 @@ import { AlbumRepository } from 'src/repositories/album.repository';
 import { AssetEditRepository } from 'src/repositories/asset-edit.repository';
 import { AssetJobRepository } from 'src/repositories/asset-job.repository';
 import { AssetRepository } from 'src/repositories/asset.repository';
+import { ClusterGroupRepository } from 'src/repositories/cluster-group.repository';
 import { ConfigRepository } from 'src/repositories/config.repository';
 import { CronRepository } from 'src/repositories/cron.repository';
 import { CryptoRepository } from 'src/repositories/crypto.repository';
@@ -263,8 +264,14 @@ export class MediumTestContext<S extends ClassConstructor<typeof BaseService> = 
   }
 
   async newPerson(dto: Partial<Insertable<PersonTable>> & { ownerId: string }) {
-    const person = mediumFactory.personInsert(dto);
-    const result = await this.get(PersonRepository).create(person);
+    const repository = this.get(PersonRepository);
+    let groupId = dto.groupId;
+    if (!groupId) {
+      const group = await repository.createGroup(dto.ownerId);
+      groupId = group.id;
+    }
+    const person = mediumFactory.personInsert({ ...dto, groupId });
+    const result = await repository.create(person);
     return { person, result };
   }
 
@@ -445,6 +452,7 @@ const newRealRepository = <T extends BaseServiceDeps[number]>(key: T, db: Kysely
     case AssetRepository:
     case AssetEditRepository:
     case AssetJobRepository:
+    case ClusterGroupRepository:
     case IntegrityRepository:
     case MemoryRepository:
     case NotificationRepository:
@@ -648,7 +656,7 @@ const assetFaceInsert = (assetFace: Partial<AssetFace> & { assetId: string }) =>
     id: assetFace.id ?? newUuid(),
     imageHeight: assetFace.imageHeight ?? 10,
     imageWidth: assetFace.imageWidth ?? 10,
-    personId: assetFace.personId ?? null,
+    personGroupId: assetFace.personGroupId ?? null,
     sourceType: assetFace.sourceType ?? SourceType.MachineLearning,
     isVisible: assetFace.isVisible ?? true,
   };
@@ -675,7 +683,7 @@ const assetJobStatusInsert = (
   };
 };
 
-const personInsert = (person: Partial<Insertable<PersonTable>> & { ownerId: string }) => {
+const personInsert = (person: Partial<Insertable<PersonTable>> & { ownerId: string; groupId: string }) => {
   const defaults = {
     birthDate: person.birthDate || null,
     color: person.color || null,

@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Insertable } from 'kysely';
 import sanitize from 'sanitize-filename';
 import { SystemConfig } from 'src/config';
 import { SALT_ROUNDS } from 'src/constants';
@@ -14,6 +13,7 @@ import { AppRepository } from 'src/repositories/app.repository';
 import { AssetEditRepository } from 'src/repositories/asset-edit.repository';
 import { AssetJobRepository } from 'src/repositories/asset-job.repository';
 import { AssetRepository } from 'src/repositories/asset.repository';
+import { ClusterGroupRepository } from 'src/repositories/cluster-group.repository';
 import { ConfigRepository } from 'src/repositories/config.repository';
 import { CronRepository } from 'src/repositories/cron.repository';
 import { CryptoRepository } from 'src/repositories/crypto.repository';
@@ -52,13 +52,12 @@ import { SystemMetadataRepository } from 'src/repositories/system-metadata.repos
 import { TagRepository } from 'src/repositories/tag.repository';
 import { TelemetryRepository } from 'src/repositories/telemetry.repository';
 import { TrashRepository } from 'src/repositories/trash.repository';
-import { UserRepository } from 'src/repositories/user.repository';
+import { NewUser, UserRepository } from 'src/repositories/user.repository';
 import { VersionHistoryRepository } from 'src/repositories/version-history.repository';
 import { VideoStreamRepository } from 'src/repositories/video-stream.repository';
 import { ViewRepository } from 'src/repositories/view-repository';
 import { WebsocketRepository } from 'src/repositories/websocket.repository';
 import { WorkflowRepository } from 'src/repositories/workflow.repository';
-import { UserTable } from 'src/schema/tables/user.table';
 import { ClassConstructor } from 'src/types';
 import { AccessRequest, checkAccess, requireAccess } from 'src/utils/access';
 import { getConfig, updateConfig } from 'src/utils/config';
@@ -74,6 +73,7 @@ export const BASE_SERVICE_DEPENDENCIES = [
   AssetRepository,
   AssetEditRepository,
   AssetJobRepository,
+  ClusterGroupRepository,
   ConfigRepository,
   CronRepository,
   CryptoRepository,
@@ -134,6 +134,7 @@ export class BaseService {
     protected assetRepository: AssetRepository,
     protected assetEditRepository: AssetEditRepository,
     protected assetJobRepository: AssetJobRepository,
+    protected clusterGroupRepository: ClusterGroupRepository,
     protected configRepository: ConfigRepository,
     protected cronRepository: CronRepository,
     protected cryptoRepository: CryptoRepository,
@@ -203,6 +204,7 @@ export class BaseService {
       ctx.assetRepository,
       ctx.assetEditRepository,
       ctx.assetJobRepository,
+      ctx.clusterGroupRepository,
       ctx.configRepository,
       ctx.cronRepository,
       ctx.cryptoRepository,
@@ -292,7 +294,7 @@ export class BaseService {
     }
   }
 
-  async createUser(dto: Insertable<UserTable> & { email: string }): Promise<UserAdmin> {
+  async createUser(dto: NewUser & { email: string }): Promise<UserAdmin> {
     const exists = await this.userRepository.getByEmail(dto.email);
     if (exists) {
       this.logger.debug('User creation rejected: user already exists');
@@ -306,7 +308,7 @@ export class BaseService {
       }
     }
 
-    const payload: Insertable<UserTable> = { ...dto };
+    const payload: NewUser = { ...dto };
     if (payload.password) {
       payload.password = await this.cryptoRepository.hashBcrypt(payload.password, SALT_ROUNDS);
     }

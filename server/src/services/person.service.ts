@@ -45,6 +45,8 @@ import { mimeTypes } from 'src/utils/mime-types';
 import { batched, findOrFail, isFacialRecognitionEnabled } from 'src/utils/misc';
 import { Point, transformPoints } from 'src/utils/transform';
 
+type FeaturePhotoTarget = { id: string; groupId: string };
+
 @Injectable()
 export class PersonService extends BaseService {
   async getAll(auth: AuthDto, dto: PersonSearchDto): Promise<PeopleResponseDto> {
@@ -56,7 +58,7 @@ export class PersonService extends BaseService {
     };
 
     if (closestPersonId) {
-      const person = await this.personRepository.getById(closestPersonId);
+      const person = await this.personRepository.getByGroupId({ userId: auth.user.id, groupId: closestPersonId });
       if (!person?.faceAssetId) {
         throw new NotFoundException('Person not found');
       }
@@ -76,50 +78,51 @@ export class PersonService extends BaseService {
     };
   }
 
-  async reassignFaces(auth: AuthDto, personId: string, dto: AssetFaceUpdateDto): Promise<PersonResponseDto[]> {
-    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [personId] });
-    const person = await this.findOrFail(personId);
+  async reassignFaces(auth: AuthDto, groupId: string, dto: AssetFaceUpdateDto): Promise<PersonResponseDto[]> {
+    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [groupId] });
+    const person = await this.findOrFail(auth, groupId);
     const result: PersonResponseDto[] = [];
-    const changeFeaturePhoto: string[] = [];
+    const changeFeaturePhoto = new Map<string, FeaturePhotoTarget>();
     for (const data of dto.data) {
-      const faces = await this.personRepository.getFacesByIds([{ personId: data.personId, assetId: data.assetId }]);
+      const faces = await this.personRepository.getFacesByIds([
+        { personGroupId: data.personId, assetId: data.assetId },
+      ]);
 
       for (const face of faces) {
         await this.requireAccess({ auth, permission: Permission.PersonCreate, ids: [face.id] });
         if (person.faceAssetId === null) {
-          changeFeaturePhoto.push(person.id);
+          changeFeaturePhoto.set(person.id, person);
         }
         if (face.person && face.person.faceAssetId === face.id) {
-          changeFeaturePhoto.push(face.person.id);
+          changeFeaturePhoto.set(face.person.id, face.person);
         }
 
-        await this.personRepository.reassignFace(face.id, personId);
+        await this.personRepository.reassignFace(face.id, person.groupId);
       }
 
       result.push(mapPerson(person));
     }
-    if (changeFeaturePhoto.length > 0) {
-      // Remove duplicates
-      await this.createNewFeaturePhoto([...new Set(changeFeaturePhoto)]);
+    if (changeFeaturePhoto.size > 0) {
+      await this.createNewFeaturePhoto(changeFeaturePhoto.values().toArray());
     }
     return result;
   }
 
-  async reassignFacesById(auth: AuthDto, personId: string, dto: FaceDto): Promise<PersonResponseDto> {
-    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [personId] });
+  async reassignFacesById(auth: AuthDto, groupId: string, dto: FaceDto): Promise<PersonResponseDto> {
+    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [groupId] });
     await this.requireAccess({ auth, permission: Permission.PersonCreate, ids: [dto.id] });
     const face = await this.personRepository.getFaceById(dto.id);
-    const person = await this.findOrFail(personId);
+    const person = await this.findOrFail(auth, groupId);
 
-    await this.personRepository.reassignFace(face.id, personId);
+    await this.personRepository.reassignFace(face.id, person.groupId);
     if (person.faceAssetId === null) {
-      await this.createNewFeaturePhoto([person.id]);
+      await this.createNewFeaturePhoto([person]);
     }
     if (face.person && face.person.faceAssetId === face.id) {
-      await this.createNewFeaturePhoto([face.person.id]);
+      await this.createNewFeaturePhoto([face.person]);
     }
 
-    return mapPerson(await this.findOrFail(personId));
+    return mapPerson(await this.findOrFail(auth, groupId));
   }
 
   async getFacesById(auth: AuthDto, dto: FaceDto): Promise<AssetFaceResponseDto[]> {
@@ -131,37 +134,37 @@ export class PersonService extends BaseService {
     return faces.map((face) => mapFaces(face, auth, asset.edits, assetDimensions));
   }
 
-  async createNewFeaturePhoto(changeFeaturePhoto: string[]) {
+  async createNewFeaturePhoto(changeFeaturePhoto: FeaturePhotoTarget[]) {
     this.logger.debug(
       `Changing feature photos for ${changeFeaturePhoto.length} ${changeFeaturePhoto.length > 1 ? 'people' : 'person'}`,
     );
 
     const jobs: JobItem[] = [];
-    for (const personId of changeFeaturePhoto) {
-      const assetFace = await this.personRepository.getRandomFace(personId);
+    for (const { id, groupId } of changeFeaturePhoto) {
+      const assetFace = await this.personRepository.getRandomFace(groupId);
 
       if (assetFace) {
-        await this.personRepository.update({ id: personId, faceAssetId: assetFace.id });
-        jobs.push({ name: JobName.PersonGenerateThumbnail, data: { id: personId } });
+        await this.personRepository.update({ id, faceAssetId: assetFace.id });
+        jobs.push({ name: JobName.PersonGenerateThumbnail, data: { id } });
       }
     }
 
     await this.jobRepository.queueAll(jobs);
   }
 
-  async getById(auth: AuthDto, id: string): Promise<PersonResponseDto> {
-    await this.requireAccess({ auth, permission: Permission.PersonRead, ids: [id] });
-    return mapPerson(await this.findOrFail(id));
+  async getById(auth: AuthDto, groupId: string): Promise<PersonResponseDto> {
+    await this.requireAccess({ auth, permission: Permission.PersonRead, ids: [groupId] });
+    return mapPerson(await this.findOrFail(auth, groupId));
   }
 
-  async getStatistics(auth: AuthDto, id: string): Promise<PersonStatisticsResponseDto> {
-    await this.requireAccess({ auth, permission: Permission.PersonRead, ids: [id] });
-    return this.personRepository.getStatistics(id);
+  async getStatistics(auth: AuthDto, groupId: string): Promise<PersonStatisticsResponseDto> {
+    await this.requireAccess({ auth, permission: Permission.PersonRead, ids: [groupId] });
+    return this.personRepository.getStatistics(groupId);
   }
 
-  async getThumbnail(auth: AuthDto, id: string): Promise<ImmichFileResponse> {
-    await this.requireAccess({ auth, permission: Permission.PersonRead, ids: [id] });
-    const person = await this.personRepository.getById(id);
+  async getThumbnail(auth: AuthDto, groupId: string): Promise<ImmichFileResponse> {
+    await this.requireAccess({ auth, permission: Permission.PersonRead, ids: [groupId] });
+    const person = await this.personRepository.getByGroupId({ userId: auth.user.id, groupId });
     if (!person || !person.thumbnailPath) {
       throw new NotFoundException();
     }
@@ -174,8 +177,10 @@ export class PersonService extends BaseService {
   }
 
   async create(auth: AuthDto, dto: PersonCreateDto): Promise<PersonResponseDto> {
+    const group = await this.personRepository.createGroup(auth.user.id);
     const person = await this.personRepository.create({
       ownerId: auth.user.id,
+      groupId: group.id,
       name: dto.name,
       birthDate: dto.birthDate,
       isHidden: dto.isHidden,
@@ -186,15 +191,16 @@ export class PersonService extends BaseService {
     return mapPerson(person);
   }
 
-  async update(auth: AuthDto, id: string, dto: PersonUpdateDto): Promise<PersonResponseDto> {
-    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [id] });
+  async update(auth: AuthDto, groupId: string, dto: PersonUpdateDto): Promise<PersonResponseDto> {
+    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [groupId] });
 
+    const { id } = await this.findOrFail(auth, groupId);
     const { name, birthDate, isHidden, featureFaceAssetId: assetId, isFavorite, color } = dto;
     // TODO: set by faceId directly
     let faceId: string | undefined;
     if (assetId) {
       await this.requireAccess({ auth, permission: Permission.AssetRead, ids: [assetId] });
-      const face = await this.personRepository.getForFeatureFaceUpdate({ personId: id, assetId });
+      const face = await this.personRepository.getForFeatureFaceUpdate({ personGroupId: groupId, assetId });
       if (!face) {
         throw new BadRequestException('Invalid assetId for feature face or asset is offline');
       }
@@ -245,8 +251,7 @@ export class PersonService extends BaseService {
 
   async deleteAll(auth: AuthDto, { ids }: BulkIdsDto): Promise<void> {
     await this.requireAccess({ auth, permission: Permission.PersonDelete, ids });
-    const people = await this.personRepository.getForPeopleDelete(ids);
-    await this.removeAllPeople(people);
+    await this.removeAllPersonGroups(ids);
   }
 
   @Chunked()
@@ -256,10 +261,32 @@ export class PersonService extends BaseService {
     this.logger.debug(`Deleted ${people.length} people`);
   }
 
+  @Chunked()
+  private async removeAllPersonGroups(groupIds: string[]) {
+    if (groupIds.length === 0) {
+      return;
+    }
+
+    const people = await this.personRepository.getForPeopleDelete(groupIds);
+    await Promise.all(people.map((person) => this.storageRepository.unlink(person.thumbnailPath)));
+    await this.personRepository.deleteGroups(groupIds);
+    this.logger.debug(`Deleted ${groupIds.length} people`);
+  }
+
   @OnJob({ name: JobName.PersonCleanup, queue: QueueName.BackgroundTask })
   async handlePersonCleanup(): Promise<JobStatus> {
     const people = await this.personRepository.getAllWithoutFaces();
-    await this.removeAllPeople(people);
+    await this.removeAllPersonGroups(people.map((person) => person.groupId));
+    return JobStatus.Success;
+  }
+
+  @OnJob({ name: JobName.PersonGroupCleanup, queue: QueueName.BackgroundTask })
+  async handlePersonGroupCleanup(): Promise<JobStatus> {
+    const clusterGroups = await this.personRepository.deleteOrphanedClusterGroups();
+    const personGroups = await this.personRepository.deleteEmptyGroups();
+
+    this.logger.debug(`Deleted ${clusterGroups} orphaned cluster groups and ${personGroups} empty person groups`);
+
     return JobStatus.Success;
   }
 
@@ -429,7 +456,7 @@ export class PersonService extends BaseService {
     const lastRun = new Date().toISOString();
 
     const faces = this.personRepository.getAllFaces(
-      force ? undefined : { personId: null, sourceType: SourceType.MachineLearning },
+      force ? undefined : { personGroupId: null, sourceType: SourceType.MachineLearning },
     );
     for await (const batch of batched(faces)) {
       await this.jobRepository.queueAll(
@@ -465,13 +492,14 @@ export class PersonService extends BaseService {
       return JobStatus.Failed;
     }
 
-    if (face.personId) {
+    if (face.personGroupId) {
       this.logger.debug(`Face ${id} already has a person assigned`);
       return JobStatus.Skipped;
     }
 
+    const { ownerId, clusterGroupId } = face.asset;
     const matches = await this.searchRepository.searchFaces({
-      userIds: [face.asset.ownerId],
+      clusterGroupId,
       embedding: face.faceSearch.embedding,
       maxDistance: machineLearning.facialRecognition.maxDistance,
       numResults: machineLearning.facialRecognition.minFaces,
@@ -495,10 +523,10 @@ export class PersonService extends BaseService {
       return JobStatus.Skipped;
     }
 
-    let personId = matches.find((match) => match.personId)?.personId;
-    if (!personId) {
-      const matchWithPerson = await this.searchRepository.searchFaces({
-        userIds: [face.asset.ownerId],
+    let personGroupId = matches.find((match) => match.personGroupId)?.personGroupId;
+    if (!personGroupId) {
+      const [matchWithPerson] = await this.searchRepository.searchFaces({
+        clusterGroupId,
         embedding: face.faceSearch.embedding,
         maxDistance: machineLearning.facialRecognition.maxDistance,
         numResults: 1,
@@ -506,21 +534,31 @@ export class PersonService extends BaseService {
         minBirthDate: new Date(face.asset.fileCreatedAt),
       });
 
-      if (matchWithPerson.length > 0) {
-        personId = matchWithPerson[0].personId;
+      personGroupId = matchWithPerson?.personGroupId ?? undefined;
+    }
+
+    if (!personGroupId && isCore) {
+      const group = await this.personRepository.createGroup(ownerId);
+      personGroupId = group.id;
+      this.logger.log(`Created person group ${personGroupId} for face ${id}`);
+    }
+
+    if (personGroupId) {
+      const person = await this.personRepository.getByGroupId({ userId: ownerId, groupId: personGroupId });
+      if (person) {
+        this.logger.debug(`Face ${id} matched person ${person.id}`);
+      } else {
+        const newPerson = await this.personRepository.create({
+          ownerId,
+          faceAssetId: face.id,
+          groupId: personGroupId,
+        });
+        this.logger.log(`Created person ${newPerson.id} for face ${id} in group ${personGroupId}`);
+        await this.jobRepository.queue({ name: JobName.PersonGenerateThumbnail, data: { id: newPerson.id } });
       }
-    }
 
-    if (isCore && !personId) {
-      this.logger.log(`Creating new person for face ${id}`);
-      const newPerson = await this.personRepository.create({ ownerId: face.asset.ownerId, faceAssetId: face.id });
-      await this.jobRepository.queue({ name: JobName.PersonGenerateThumbnail, data: { id: newPerson.id } });
-      personId = newPerson.id;
-    }
-
-    if (personId) {
-      this.logger.debug(`Assigning face ${id} to person ${personId}`);
-      await this.personRepository.reassignFaces({ faceIds: [id], newPersonId: personId });
+      this.logger.debug(`Assigning face ${id} to person group ${personGroupId}`);
+      await this.personRepository.reassignFaces({ faceIds: [id], newPersonGroupId: personGroupId });
     }
 
     return JobStatus.Success;
@@ -538,15 +576,15 @@ export class PersonService extends BaseService {
     return JobStatus.Success;
   }
 
-  async mergePerson(auth: AuthDto, id: string, dto: MergePersonDto): Promise<BulkIdResponseDto[]> {
+  async mergePerson(auth: AuthDto, groupId: string, dto: MergePersonDto): Promise<BulkIdResponseDto[]> {
     const mergeIds = dto.ids;
-    if (mergeIds.includes(id)) {
+    if (mergeIds.includes(groupId)) {
       throw new BadRequestException('Cannot merge a person into themselves');
     }
 
-    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [id] });
-    let primaryPerson = await this.findOrFail(id);
-    const primaryName = primaryPerson.name || primaryPerson.id;
+    await this.requireAccess({ auth, permission: Permission.PersonUpdate, ids: [groupId] });
+    let primaryPerson = await this.findOrFail(auth, groupId);
+    const primaryName = primaryPerson.name || primaryPerson.groupId;
 
     const results: BulkIdResponseDto[] = [];
 
@@ -564,7 +602,7 @@ export class PersonService extends BaseService {
       }
 
       try {
-        const mergePerson = await this.personRepository.getById(mergeId);
+        const mergePerson = await this.personRepository.getByGroupId({ userId: auth.user.id, groupId: mergeId });
         if (!mergePerson) {
           results.push({ id: mergeId, success: false, error: BulkIdErrorReason.NOT_FOUND });
           continue;
@@ -583,25 +621,25 @@ export class PersonService extends BaseService {
           primaryPerson = await this.personRepository.update(update);
         }
 
-        const mergeName = mergePerson.name || mergePerson.id;
-        const mergeData: UpdateFacesData = { oldPersonId: mergeId, newPersonId: id };
+        const mergeName = mergePerson.name || mergePerson.groupId;
+        const mergeData: UpdateFacesData = { oldPersonGroupId: mergeId, newPersonGroupId: primaryPerson.groupId };
         this.logger.log(`Merging ${mergeName} into ${primaryName}`);
 
         await this.personRepository.reassignFaces(mergeData);
-        await this.removeAllPeople([mergePerson]);
+        await this.removeAllPersonGroups([mergeId]);
 
         this.logger.log(`Merged ${mergeName} into ${primaryName}`);
         results.push({ id: mergeId, success: true });
       } catch (error: Error | any) {
-        this.logger.error(`Unable to merge ${mergeId} into ${id}: ${error}`, error?.stack);
+        this.logger.error(`Unable to merge ${mergeId} into ${groupId}: ${error}`, error?.stack);
         results.push({ id: mergeId, success: false, error: BulkIdErrorReason.UNKNOWN });
       }
     }
     return results;
   }
 
-  private findOrFail(id: string) {
-    return findOrFail(() => this.personRepository.getById(id), 'Person');
+  private findOrFail(auth: AuthDto, groupId: string) {
+    return findOrFail(() => this.personRepository.getByGroupId({ userId: auth.user.id, groupId }), 'Person');
   }
 
   // TODO return a asset face response
@@ -613,7 +651,7 @@ export class PersonService extends BaseService {
 
     const [asset, person] = await Promise.all([
       this.assetRepository.getById(dto.assetId, { edits: true, exifInfo: true }),
-      this.findOrFail(dto.personId),
+      this.findOrFail(auth, dto.personId),
     ]);
 
     if (!asset) {
@@ -661,7 +699,7 @@ export class PersonService extends BaseService {
     }
 
     await this.personRepository.createAssetFace({
-      personId: dto.personId,
+      personGroupId: person.groupId,
       assetId: dto.assetId,
       imageHeight: dto.imageHeight,
       imageWidth: dto.imageWidth,
@@ -673,7 +711,7 @@ export class PersonService extends BaseService {
     });
 
     if (!person.faceAssetId) {
-      await this.createNewFeaturePhoto([person.id]);
+      await this.createNewFeaturePhoto([person]);
     }
   }
 

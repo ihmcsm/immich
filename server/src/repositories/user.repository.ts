@@ -11,6 +11,8 @@ import { UserTable } from 'src/schema/tables/user.table';
 import { UserMetadata, UserMetadataItem } from 'src/types';
 import { asUuid } from 'src/utils/database';
 
+export type NewUser = Omit<Insertable<UserTable>, 'clusterGroupId'>;
+
 export interface UserListFilter {
   id?: string;
   withDeleted?: boolean;
@@ -171,10 +173,14 @@ export class UserRepository {
       .execute();
   }
 
-  async create(dto: Insertable<UserTable>) {
+  async create(dto: NewUser) {
     return this.db
+      .with('new_cluster_group', (db) => db.insertInto('cluster_group').defaultValues().returning('cluster_group.id'))
       .insertInto('user')
-      .values(dto)
+      .values((eb) => ({
+        ...dto,
+        clusterGroupId: eb.selectFrom('new_cluster_group').select('new_cluster_group.id'),
+      }))
       .returning(columns.userAdmin)
       .returning(withMetadata)
       .executeTakeFirstOrThrow();
